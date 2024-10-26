@@ -1,0 +1,63 @@
+name: LeetCode Tracker
+
+on:
+  push:
+    paths:
+      - "*/*" # Trigger on any file push in any subdirectory
+
+jobs:
+  update-db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 2 # Fetch the last two commits to compare changes
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymongo requests groq
+
+      - name: Extract problem info
+        id: extract_info
+        run: |
+          CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r ${{ github.sha }})
+          for FILE in $CHANGED_FILES; do
+            # Exit if file is a markdown file
+            if [[ "$FILE" == *.md || "$FILE" == *.MD ]]; then
+              echo "Markdown file changed. Skipping update."
+              exit 0
+            fi
+            
+            DIR_NAME=$(dirname "$FILE")
+            if [[ "$DIR_NAME" =~ ^[0-9]+-.*$ ]]; then
+              PROBLEM_INFO=$(basename "$DIR_NAME")
+              PROBLEM_NUMBER=$(echo $PROBLEM_INFO | cut -d'-' -f1)
+              PROBLEM_NAME=$(echo $PROBLEM_INFO | cut -d'-' -f2-)
+
+              # Save the code to a temporary file
+              cp "$FILE" /tmp/code_solution.txt
+
+              echo "problem_number=$PROBLEM_NUMBER" >> $GITHUB_OUTPUT
+              echo "problem_name=$PROBLEM_NAME" >> $GITHUB_OUTPUT
+              break
+            fi
+          done
+          if [ -z "${PROBLEM_NUMBER:-}" ]; then
+            echo "No LeetCode solution files found in this commit."
+            exit 0
+          fi
+
+      - name: Run update script
+        if: steps.extract_info.outputs.problem_number != ''
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        working-directory: ./scripts
+        run: |
+          # Read the code directly from the temporary file
+          python update_database.py "${{ steps.extract_info.outputs.problem_name }}" "$(cat /tmp/code_solution.txt)"
